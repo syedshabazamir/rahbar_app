@@ -38,8 +38,25 @@ class AppColors {
   static const Color helperText = Color(0xFFB0A9B3);
   static const Color success = Color(0xFF4E9A6B); // validated field checkmark
 
+  // ---- Alerts ----
+  static const Color alertDanger = Color(
+    0xFFD64545,
+  ); // error / destructive alerts
+  static const Color alertMaroon = Color(
+    0xFF7C2F3E,
+  ); // deeper maroon accent for buttons/badges
+  static const Color alertMaroonLight = Color(
+    0xFFA85C6B,
+  ); // lighter maroon accent for buttons/badges
+
   // ---- Misc ----
   static const Color homeIndicator = Color(
     0xFF262631,
   ); // bottom drag-handle bar
+  static const Color eveningDark = Color(
+    0xFF2E2438,
+  ); // dark plum, evening/night themed surface
+  static const Color eveningCard = Color(
+    0xFF3D3247,
+  ); // card surface on top of eveningDark background
 }

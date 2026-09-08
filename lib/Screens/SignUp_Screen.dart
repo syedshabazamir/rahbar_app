@@ -2,35 +2,11 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:rahbar_app/Controller/Signup_controller.dart';
 import 'package:rahbar_app/utils/App_colors.dart';
 
-class SignupScreen extends StatefulWidget {
+class SignupScreen extends StatelessWidget {
   const SignupScreen({super.key});
-
-  @override
-  State<SignupScreen> createState() => _SignupScreenState();
-}
-
-class _SignupScreenState extends State<SignupScreen> {
-  final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _emailController = TextEditingController();
-  final TextEditingController _passwordController = TextEditingController();
-
-  bool _obscurePassword = true;
-  bool _isEmailValid = false;
-
-  static final RegExp _emailRegex = RegExp(r'^[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}$');
-
-  void _onEmailChanged(String value) {
-    setState(() {
-      _isEmailValid = _emailRegex.hasMatch(value.trim());
-    });
-  }
-
-  void _onContinuePressed() {
-    // TODO: validate fields, then move to step 2 of 3.
-    Get.toNamed('/trusted-contact');
-  }
 
   // Builds a labeled input field matching the design:
   // grey label, white rounded field, optional trailing icon/helper text.
@@ -42,7 +18,6 @@ class _SignupScreenState extends State<SignupScreen> {
     Widget? trailing,
     String? helperText,
     TextInputType keyboardType = TextInputType.text,
-    ValueChanged<String>? onChanged,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -66,7 +41,6 @@ class _SignupScreenState extends State<SignupScreen> {
             controller: controller,
             obscureText: obscureText,
             keyboardType: keyboardType,
-            onChanged: onChanged,
             style: const TextStyle(fontSize: 16, color: AppColors.title),
             decoration: InputDecoration(
               hintText: hint,
@@ -92,15 +66,11 @@ class _SignupScreenState extends State<SignupScreen> {
   }
 
   @override
-  void dispose() {
-    _nameController.dispose();
-    _emailController.dispose();
-    _passwordController.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
+    // Registers (or reuses) the controller that owns all form state
+    // and the real Firebase Auth + Firestore signup logic.
+    final controller = Get.put(SignupController());
+
     return Scaffold(
       backgroundColor: AppColors.background,
       body: SafeArea(
@@ -159,72 +129,111 @@ class _SignupScreenState extends State<SignupScreen> {
                 _buildField(
                   label: 'Full name',
                   hint: 'e.g. Amara Khan',
-                  controller: _nameController,
+                  controller: controller.nameController,
                 ),
 
                 const SizedBox(height: 20),
 
-                // ---- Email address (instead of phone) ----
-                _buildField(
-                  label: 'Email address',
-                  hint: 'e.g. amara@gmail.com',
-                  controller: _emailController,
-                  keyboardType: TextInputType.emailAddress,
-                  onChanged: _onEmailChanged,
-                  trailing: _isEmailValid
-                      ? const Icon(
-                          Icons.check,
-                          color: AppColors.success,
-                          size: 20,
-                        )
-                      : null,
+                // ---- Email address ----
+                Obx(
+                  () => _buildField(
+                    label: 'Email address',
+                    hint: 'e.g. amara@gmail.com',
+                    controller: controller.emailController,
+                    keyboardType: TextInputType.emailAddress,
+                    trailing: controller.isEmailValid.value
+                        ? const Icon(
+                            Icons.check,
+                            color: AppColors.success,
+                            size: 20,
+                          )
+                        : null,
+                  ),
+                ),
+
+                const SizedBox(height: 20),
+
+                // ---- Phone number ----
+                // Stored so trusted contacts can find this account by
+                // phone number and route SOS notifications correctly.
+                // NOT used for login — login stays email/password.
+                Obx(
+                  () => _buildField(
+                    label: 'Phone number',
+                    hint: 'e.g. 0300 1234567',
+                    controller: controller.phoneController,
+                    keyboardType: TextInputType.phone,
+                    helperText: "So trusted contacts can find and alert you",
+                    trailing: controller.isPhoneValid.value
+                        ? const Icon(
+                            Icons.check,
+                            color: AppColors.success,
+                            size: 20,
+                          )
+                        : null,
+                  ),
                 ),
 
                 const SizedBox(height: 20),
 
                 // ---- Password ----
-                _buildField(
-                  label: 'Password',
-                  hint: 'Create a password',
-                  controller: _passwordController,
-                  obscureText: _obscurePassword,
-                  helperText: 'At least 8 characters',
-                  trailing: IconButton(
-                    onPressed: () {
-                      setState(() => _obscurePassword = !_obscurePassword);
-                    },
-                    icon: Icon(
-                      _obscurePassword
-                          ? Icons.visibility_off_outlined
-                          : Icons.visibility_outlined,
-                      color: AppColors.fieldHint,
-                      size: 20,
+                Obx(
+                  () => _buildField(
+                    label: 'Password',
+                    hint: 'Create a password',
+                    controller: controller.passwordController,
+                    obscureText: controller.obscurePassword.value,
+                    helperText: 'At least 8 characters',
+                    trailing: IconButton(
+                      onPressed: controller.togglePasswordVisibility,
+                      icon: Icon(
+                        controller.obscurePassword.value
+                            ? Icons.visibility_off_outlined
+                            : Icons.visibility_outlined,
+                        color: AppColors.fieldHint,
+                        size: 20,
+                      ),
                     ),
                   ),
                 ),
 
                 const SizedBox(height: 28),
 
-                // ---- Continue button ----
-                SizedBox(
-                  width: double.infinity,
-                  height: 56,
-                  child: ElevatedButton(
-                    onPressed: _onContinuePressed,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primaryPurple,
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
+                // ---- Continue button (shows a spinner while signing up) ----
+                Obx(
+                  () => SizedBox(
+                    width: double.infinity,
+                    height: 56,
+                    child: ElevatedButton(
+                      onPressed: controller.isLoading.value
+                          ? null
+                          : controller.signUp,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primaryPurple,
+                        disabledBackgroundColor: AppColors.primaryPurple
+                            .withOpacity(0.6),
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
                       ),
-                    ),
-                    child: const Text(
-                      'Continue',
-                      style: TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w600,
-                      ),
+                      child: controller.isLoading.value
+                          ? const SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.4,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Text(
+                              'Continue',
+                              style: TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                     ),
                   ),
                 ),

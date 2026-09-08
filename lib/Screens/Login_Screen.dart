@@ -2,33 +2,11 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:rahbar_app/Controller/Login_controller.dart';
 import 'package:rahbar_app/utils/App_colors.dart';
 
-class LoginScreen extends StatefulWidget {
+class LoginScreen extends StatelessWidget {
   const LoginScreen({super.key});
-
-  @override
-  State<LoginScreen> createState() => _LoginScreenState();
-}
-
-class _LoginScreenState extends State<LoginScreen> {
-  final TextEditingController _emailController = TextEditingController();
-  final TextEditingController _passwordController = TextEditingController();
-
-  bool _obscurePassword = true;
-  bool _isEmailValid = false;
-
-  static final RegExp _emailRegex = RegExp(r'^[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}$');
-
-  void _onEmailChanged(String value) {
-    setState(() {
-      _isEmailValid = _emailRegex.hasMatch(value.trim());
-    });
-  }
-
-  void _onLogInPressed() {
-    // TODO: validate + call your auth API, then Get.offAllNamed('/home').
-  }
 
   // Builds a labeled input field matching the design:
   // grey label, white rounded field, optional trailing icon/helper text.
@@ -90,14 +68,9 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   @override
-  void dispose() {
-    _emailController.dispose();
-    _passwordController.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
+    final controller = Get.put(LoginController());
+
     return Scaffold(
       backgroundColor: AppColors.background,
       body: SafeArea(
@@ -137,39 +110,40 @@ class _LoginScreenState extends State<LoginScreen> {
                 const SizedBox(height: 28),
 
                 // ---- Email address ----
-                _buildField(
-                  label: 'Email address',
-                  hint: 'e.g. amara@gmail.com',
-                  controller: _emailController,
-                  keyboardType: TextInputType.emailAddress,
-                  onChanged: _onEmailChanged,
-                  trailing: _isEmailValid
-                      ? const Icon(
-                          Icons.check,
-                          color: AppColors.success,
-                          size: 20,
-                        )
-                      : null,
+                Obx(
+                  () => _buildField(
+                    label: 'Email address',
+                    hint: 'e.g. amara@gmail.com',
+                    controller: controller.emailController,
+                    keyboardType: TextInputType.emailAddress,
+                    trailing: controller.isEmailValid.value
+                        ? const Icon(
+                            Icons.check,
+                            color: AppColors.success,
+                            size: 20,
+                          )
+                        : null,
+                  ),
                 ),
 
                 const SizedBox(height: 20),
 
                 // ---- Password ----
-                _buildField(
-                  label: 'Password',
-                  hint: 'Enter your password',
-                  controller: _passwordController,
-                  obscureText: _obscurePassword,
-                  trailing: IconButton(
-                    onPressed: () {
-                      setState(() => _obscurePassword = !_obscurePassword);
-                    },
-                    icon: Icon(
-                      _obscurePassword
-                          ? Icons.visibility_off_outlined
-                          : Icons.visibility_outlined,
-                      color: AppColors.fieldHint,
-                      size: 20,
+                Obx(
+                  () => _buildField(
+                    label: 'Password',
+                    hint: 'Enter your password',
+                    controller: controller.passwordController,
+                    obscureText: controller.obscurePassword.value,
+                    trailing: IconButton(
+                      onPressed: controller.togglePasswordVisibility,
+                      icon: Icon(
+                        controller.obscurePassword.value
+                            ? Icons.visibility_off_outlined
+                            : Icons.visibility_outlined,
+                        color: AppColors.fieldHint,
+                        size: 20,
+                      ),
                     ),
                   ),
                 ),
@@ -198,25 +172,42 @@ class _LoginScreenState extends State<LoginScreen> {
                 const SizedBox(height: 18),
 
                 // ---- Log in button ----
-                SizedBox(
-                  width: double.infinity,
-                  height: 56,
-                  child: ElevatedButton(
-                    onPressed: _onLogInPressed,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primaryPurple,
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
+                Obx(
+                  () => SizedBox(
+                    width: double.infinity,
+                    height: 56,
+                    child: ElevatedButton(
+                      onPressed: controller.isLoading.value
+                          ? null
+                          : controller.logIn,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primaryPurple,
+                        disabledBackgroundColor: AppColors.primaryPurple
+                            .withOpacity(0.4),
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
                       ),
-                    ),
-                    child: const Text(
-                      'Log in',
-                      style: TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w600,
-                      ),
+                      child: controller.isLoading.value
+                          ? const SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.5,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  Colors.white,
+                                ),
+                              ),
+                            )
+                          : const Text(
+                              'Log in',
+                              style: TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                     ),
                   ),
                 ),

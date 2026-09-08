@@ -37,6 +37,16 @@ dependencies:
   get: ^4.7.3
   google_fonts: ^8.2.1
   permission_handler: ^11.4.0
+  camera: ^0.10.6            # takes the photo + records video during SOS
+  record: ^7.1.1           # records the standalone audio clip
+  video_player: ^2.9.1         # plays back recorded video in Video_Playback_Screen
+  audioplayers: ^6.1.0          # plays back recorded audio inline in Recorded_Evidence_Screen
+  path_provider: ^2.1.4
+  firebase_core: ^4.14.0
+  firebase_auth: ^6.6.1
+  cloud_firestore: ^6.9.0
+  firebase_messaging: ^16.6.0
+  url_launcher: ^6.3.2
 
 dev_dependencies:
   flutter_test:
@@ -48,6 +58,9 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+
+dependency_overrides:
+  record_linux: ^2.1.0
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

@@ -13,8 +13,6 @@ class PermissionsScreen extends StatefulWidget {
 
 class _PermissionsScreenState extends State<PermissionsScreen>
     with WidgetsBindingObserver {
-  // Real OS permission status for each toggle, checked on load and
-  // whenever the user flips a switch or returns from Settings.
   PermissionStatus _locationStatus = PermissionStatus.denied;
   PermissionStatus _microphoneStatus = PermissionStatus.denied;
   PermissionStatus _cameraStatus = PermissionStatus.denied;
@@ -34,8 +32,6 @@ class _PermissionsScreenState extends State<PermissionsScreen>
     super.dispose();
   }
 
-  // Re-check permission status when the app resumes — covers the case
-  // where the user granted/denied a permission from the Settings app.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
@@ -56,10 +52,6 @@ class _PermissionsScreenState extends State<PermissionsScreen>
     });
   }
 
-  // Called when the user flips a toggle. If turning ON, this fires the
-  // real OS permission dialog right then (on-demand, not pre-requested).
-  // If turning OFF, apps cannot revoke OS permissions programmatically —
-  // we send the user to system Settings to do that themselves.
   Future<void> _handleToggle({
     required Permission permission,
     required bool turningOn,
@@ -82,7 +74,6 @@ class _PermissionsScreenState extends State<PermissionsScreen>
         );
       }
     } else {
-      // Can't programmatically revoke — route the user to Settings.
       _showOpenSettingsDialog(
         message:
             'To turn this off, disable it for Rahbar in your device Settings.',
@@ -139,11 +130,11 @@ class _PermissionsScreenState extends State<PermissionsScreen>
 
   void _onFinishSetupPressed() {
     // All three permissions are already genuinely granted at this point.
-    // TODO: navigate into the app, e.g. Get.offAllNamed('/home').
+    // Clears the whole onboarding stack so back-navigation from Home
+    // doesn't return the user to signup/permissions/etc.
+    Get.offAllNamed('/home');
   }
 
-  // Builds one permission row: icon, title + subtitle, and a toggle switch
-  // bound to the real, live OS permission status.
   Widget _buildPermissionTile({
     required IconData icon,
     required String title,
@@ -233,8 +224,6 @@ class _PermissionsScreenState extends State<PermissionsScreen>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const SizedBox(height: 8),
-
-                    // ---- Back + step indicator ----
                     Row(
                       children: [
                         IconButton(
@@ -257,10 +246,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
                         ),
                       ],
                     ),
-
                     const SizedBox(height: 28),
-
-                    // ---- Heading ----
                     Text(
                       'Allow permissions',
                       style: GoogleFonts.tinos(
@@ -278,10 +264,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
                         height: 1.35,
                       ),
                     ),
-
                     const SizedBox(height: 28),
-
-                    // ---- Permission tiles (real OS status + on-demand requests) ----
                     Expanded(
                       child: SingleChildScrollView(
                         child: Column(
@@ -317,8 +300,6 @@ class _PermissionsScreenState extends State<PermissionsScreen>
                         ),
                       ),
                     ),
-
-                    // ---- Finish setup button ----
                     SizedBox(
                       width: double.infinity,
                       height: 56,
@@ -345,7 +326,6 @@ class _PermissionsScreenState extends State<PermissionsScreen>
                         ),
                       ),
                     ),
-
                     const SizedBox(height: 16),
                   ],
                 ),

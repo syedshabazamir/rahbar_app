@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "126284878350",
+    "project_id": "rahbar-f7d5c",
+    "storage_bucket": "rahbar-f7d5c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:126284878350:android:a8ccc7a4800285caa9225f",
+        "android_client_info": {
+          "package_name": "com.example.rahbar_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDVPOHPPJdOVQoQm7YFPKgVhyin0gjuZ8Y"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
