@@ -155,7 +155,7 @@ class LoginScreen extends StatelessWidget {
                   alignment: Alignment.centerRight,
                   child: TextButton(
                     onPressed: () {
-                      // Get.toNamed('/forgot-password');
+                      Get.toNamed('/forgot-password');
                     },
                     style: TextButton.styleFrom(padding: EdgeInsets.zero),
                     child: const Text(

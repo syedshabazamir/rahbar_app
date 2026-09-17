@@ -1,3 +1,5 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:rahbar_app/utils/App_colors.dart';
@@ -16,14 +18,112 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _microphoneEnabled = true;
   bool _cameraEnabled = true;
 
-  // TODO: replace with the actual logged-in user's data.
-  final String _name = 'Amara Khan';
-  final String _initials = 'AK';
-  final String _phone = '+92 300 1234567';
+  // Real profile data, loaded from users/{uid} in Firestore — the
+  // same doc SignupController writes at signup.
+  String? _name;
+  String? _phone;
+  bool _isLoadingProfile = true;
 
-  void _logout() {
-    // TODO: hook up to real sign-out logic (clear session, tokens, etc.)
-    Get.offAllNamed('/login');
+  bool _isLoggingOut = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUserProfile();
+  }
+
+  Future<void> _loadUserProfile() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      if (mounted) setState(() => _isLoadingProfile = false);
+      return;
+    }
+
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .get();
+      final data = doc.data();
+      if (!mounted) return;
+      setState(() {
+        _name = (data?['name'] as String?)?.trim();
+        _phone = (data?['phone'] as String?)?.trim();
+        _isLoadingProfile = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoadingProfile = false);
+    }
+  }
+
+  // "Amara Khan" -> "AK"; falls back to "?" if there's nothing usable.
+  String get _initials {
+    final trimmed = _name?.trim();
+    if (trimmed == null || trimmed.isEmpty) return '?';
+    final parts = trimmed.split(RegExp(r'\s+'));
+    if (parts.length == 1) return parts.first.substring(0, 1).toUpperCase();
+    return (parts.first.substring(0, 1) + parts.last.substring(0, 1))
+        .toUpperCase();
+  }
+
+  // Confirms first (logging out mid-emergency by accident would be
+  // bad), then signs out of Firebase Auth for real and clears the
+  // whole navigation stack so back-navigation can't return to a
+  // signed-out session.
+  Future<void> _logout() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.background,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Log out?', style: TextStyle(color: AppColors.title)),
+        content: const Text(
+          "You'll need to sign back in to use Rahbar again.",
+          style: TextStyle(color: AppColors.subtitle),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Get.back(result: false),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: AppColors.subtitle),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Get.back(result: true),
+            child: const Text(
+              'Log out',
+              style: TextStyle(
+                color: AppColors.alertMaroon,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _isLoggingOut = true);
+    try {
+      await FirebaseAuth.instance.signOut();
+      if (!mounted) return;
+      // Clears the whole stack so back-navigation from Login can't
+      // return to a screen that assumed a signed-in user.
+      Get.offAllNamed('/login');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoggingOut = false);
+      Get.snackbar(
+        'Could not log out',
+        'Please try again.',
+        snackPosition: SnackPosition.BOTTOM,
+        backgroundColor: const Color(0xFF9B2C3A),
+        colorText: Colors.white,
+      );
+    }
   }
 
   @override
@@ -80,26 +180,44 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               ),
                             ),
                             const SizedBox(width: 14),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  _name,
-                                  style: const TextStyle(
-                                    fontSize: 15.5,
-                                    fontWeight: FontWeight.w700,
-                                    color: AppColors.title,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  _phone,
-                                  style: const TextStyle(
-                                    fontSize: 13,
-                                    color: AppColors.subtitle,
-                                  ),
-                                ),
-                              ],
+                            Expanded(
+                              child: _isLoadingProfile
+                                  ? const SizedBox(
+                                      height: 18,
+                                      width: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        valueColor:
+                                            AlwaysStoppedAnimation<Color>(
+                                              AppColors.primaryPurple,
+                                            ),
+                                      ),
+                                    )
+                                  : Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          _name?.isNotEmpty == true
+                                              ? _name!
+                                              : 'Unnamed user',
+                                          style: const TextStyle(
+                                            fontSize: 15.5,
+                                            fontWeight: FontWeight.w700,
+                                            color: AppColors.title,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        if (_phone?.isNotEmpty == true)
+                                          Text(
+                                            _phone!,
+                                            style: const TextStyle(
+                                              fontSize: 13,
+                                              color: AppColors.subtitle,
+                                            ),
+                                          ),
+                                      ],
+                                    ),
                             ),
                           ],
                         ),
@@ -146,7 +264,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       SizedBox(
                         height: 52,
                         child: OutlinedButton(
-                          onPressed: _logout,
+                          onPressed: _isLoggingOut ? null : _logout,
                           style: OutlinedButton.styleFrom(
                             foregroundColor: AppColors.alertMaroon,
                             side: BorderSide(
@@ -156,13 +274,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               borderRadius: BorderRadius.circular(14),
                             ),
                           ),
-                          child: const Text(
-                            'Log out',
-                            style: TextStyle(
-                              fontSize: 15.5,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
+                          child: _isLoggingOut
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.5,
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      AppColors.alertMaroon,
+                                    ),
+                                  ),
+                                )
+                              : const Text(
+                                  'Log out',
+                                  style: TextStyle(
+                                    fontSize: 15.5,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
                         ),
                       ),
                       const SizedBox(height: 16),

@@ -1,3 +1,5 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:rahbar_app/utils/App_colors.dart';
@@ -21,6 +23,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // Drives the pulsing outer rings while armed.
   late final AnimationController _pulseController;
 
+  // Greeting name shown in the top bar. Starts from the Auth
+  // displayName (set at signup) so there's no empty flash, then gets
+  // refreshed from the user's Firestore doc -- the actual source of
+  // truth for 'name' -- once that loads.
+  String _greetingName = 'there';
+
   @override
   void initState() {
     super.initState();
@@ -34,6 +42,40 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       vsync: this,
       duration: const Duration(seconds: 2),
     )..repeat();
+    _loadUserName();
+  }
+
+  Future<void> _loadUserName() async {
+    final user = FirebaseAuth.instance.currentUser;
+
+    // Immediate fallback from the cached Auth profile.
+    final fallback = _firstNameFrom(user?.displayName);
+    if (fallback != null && mounted) {
+      setState(() => _greetingName = fallback);
+    }
+
+    final uid = user?.uid;
+    if (uid == null) return;
+
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .get();
+      final name = _firstNameFrom(doc.data()?['name'] as String?);
+      if (mounted && name != null) {
+        setState(() => _greetingName = name);
+      }
+    } catch (_) {
+      // Firestore lookup failed -- keep whatever fallback we already have.
+    }
+  }
+
+  // Trims and returns just the first name, or null if there's nothing usable.
+  String? _firstNameFrom(String? fullName) {
+    final trimmed = fullName?.trim();
+    if (trimmed == null || trimmed.isEmpty) return null;
+    return trimmed.split(RegExp(r'\s+')).first;
   }
 
   @override
@@ -64,7 +106,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   void _onSosSent() {
     _holdController.reset();
-    // TODO: trigger the real SOS flow — send location + start
+    // TODO: trigger the real SOS flow -- send location + start
     // recording + notify trusted contacts.
     Get.snackbar(
       'SOS sent',
@@ -90,9 +132,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text(
-                    'Hi, Amara',
-                    style: TextStyle(
+                  Text(
+                    'Hi, $_greetingName',
+                    style: const TextStyle(
                       fontSize: 22,
                       fontWeight: FontWeight.w700,
                       color: AppColors.title,

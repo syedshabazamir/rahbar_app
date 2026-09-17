@@ -79,18 +79,31 @@ class SignupController extends GetxController {
           .createUserWithEmailAndPassword(email: email, password: password);
 
       final uid = credential.user!.uid;
+      final normalizedEmail = email.toLowerCase();
 
       // 2. Write the user's profile to Firestore. The 'phone' field is
       // what the syncPhoneIndex Cloud Function watches to keep
       // phoneIndex/{phone} up to date for trusted-contact lookups.
       await FirebaseFirestore.instance.collection('users').doc(uid).set({
         'name': name,
-        'email': email.toLowerCase(),
+        'email': normalizedEmail,
         'phone': normalizedPhone,
         'createdAt': FieldValue.serverTimestamp(),
       });
 
-      // 3. Optionally set the display name on the Auth profile too.
+      // 3. Write a minimal public existence-check entry, doc-keyed by
+      // email. This is what lets the Forgot Password screen verify an
+      // email is registered *before* the user is signed in, without
+      // exposing the private 'users' collection (name, phone, etc.) to
+      // an unauthenticated read. Rules restrict this to: readable by
+      // anyone, but only creatable by the account it belongs to, and
+      // never editable/deletable from the client.
+      await FirebaseFirestore.instance
+          .collection('emailIndex')
+          .doc(normalizedEmail)
+          .set({'uid': uid});
+
+      // 4. Optionally set the display name on the Auth profile too.
       await credential.user!.updateDisplayName(name);
 
       isLoading.value = false;
