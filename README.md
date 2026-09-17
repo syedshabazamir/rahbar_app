@@ -150,7 +150,7 @@ Built with ❤️ using Flutter.
 
 **Project Name:** Rahbar
 **Project Type:** Personal Safety & Emergency Assistance
-**Platform:** Android, Ios
+**Platform:** Android,IOS
 **Framework:** Flutter
 **State Management:** GetX
 **Status:** In Development
