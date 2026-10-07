@@ -1,5 +1,4 @@
 import 'dart:io';
-
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -9,8 +8,7 @@ import 'package:rahbar_app/utils/App_colors.dart';
 import 'package:rahbar_app/Screens/Video_Playback_Screen.dart';
 
 /// Shows evidence (photo / audio / video) actually captured and saved
-/// on-device during an SOS alert. Expects arguments: { 'name' } (optional,
-/// used only for the header text).
+/// on-device during an SOS alert.
 class RecordedEvidenceScreen extends StatefulWidget {
   const RecordedEvidenceScreen({super.key});
 
@@ -19,18 +17,79 @@ class RecordedEvidenceScreen extends StatefulWidget {
 }
 
 class _RecordedEvidenceScreenState extends State<RecordedEvidenceScreen> {
-  late Future<List<EvidenceFile>> _evidenceFuture;
+  List<EvidenceFile> _evidence = [];
+  bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _evidenceFuture = EvidenceRecorderService.instance.getSavedEvidence();
+    _loadEvidence();
   }
 
-  Future<void> _refresh() async {
+  Future<void> _loadEvidence() async {
+    setState(() => _isLoading = true);
+    final items = await EvidenceRecorderService.instance.getSavedEvidence();
+    if (!mounted) return;
     setState(() {
-      _evidenceFuture = EvidenceRecorderService.instance.getSavedEvidence();
+      _evidence = items;
+      _isLoading = false;
     });
+  }
+
+  Future<void> _deleteItem(EvidenceFile file) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.background,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          'Delete this item?',
+          style: TextStyle(color: AppColors.title, fontWeight: FontWeight.w700),
+        ),
+        content: Text(
+          '${file.label} will be permanently removed from this device.',
+          style: const TextStyle(color: AppColors.subtitle),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Get.back(result: false),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: AppColors.subtitle),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Get.back(result: true),
+            child: const Text(
+              'Delete',
+              style: TextStyle(
+                color: Color(0xFF9B2C3A),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    final removedIndex = _evidence.indexOf(file);
+    setState(() => _evidence.remove(file));
+
+    try {
+      await EvidenceRecorderService.instance.deleteEvidence(file.path);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _evidence.insert(removedIndex, file));
+      Get.snackbar(
+        'Could not delete item',
+        'Please try again.',
+        snackPosition: SnackPosition.BOTTOM,
+        backgroundColor: const Color(0xFF9B2C3A),
+        colorText: Colors.white,
+      );
+    }
   }
 
   @override
@@ -71,7 +130,9 @@ class _RecordedEvidenceScreenState extends State<RecordedEvidenceScreen> {
               Padding(
                 padding: const EdgeInsets.only(left: 4),
                 child: Text(
-                  subtitleText,
+                  _evidence.isEmpty
+                      ? subtitleText
+                      : '$subtitleText · Hold an item to delete',
                   style: const TextStyle(
                     fontSize: 13,
                     color: AppColors.subtitle,
@@ -81,16 +142,10 @@ class _RecordedEvidenceScreenState extends State<RecordedEvidenceScreen> {
               const SizedBox(height: 20),
 
               Expanded(
-                child: FutureBuilder<List<EvidenceFile>>(
-                  future: _evidenceFuture,
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState != ConnectionState.done) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-
-                    final evidence = snapshot.data ?? [];
-                    if (evidence.isEmpty) {
-                      return const Center(
+                child: _isLoading
+                    ? const Center(child: CircularProgressIndicator())
+                    : _evidence.isEmpty
+                    ? const Center(
                         child: Text(
                           'No evidence captured yet.',
                           style: TextStyle(
@@ -98,29 +153,35 @@ class _RecordedEvidenceScreenState extends State<RecordedEvidenceScreen> {
                             color: AppColors.subtitle,
                           ),
                         ),
-                      );
-                    }
-
-                    return RefreshIndicator(
-                      onRefresh: _refresh,
-                      child: ListView.separated(
-                        itemCount: evidence.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 12),
-                        itemBuilder: (context, index) {
-                          final item = evidence[index];
-                          switch (item.type) {
-                            case EvidenceType.audio:
-                              return _AudioEvidenceTile(file: item);
-                            case EvidenceType.video:
-                              return _VideoEvidenceTile(file: item);
-                            case EvidenceType.photo:
-                              return _PhotoEvidenceTile(file: item);
-                          }
-                        },
+                      )
+                    : RefreshIndicator(
+                        onRefresh: _loadEvidence,
+                        child: ListView.separated(
+                          itemCount: _evidence.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(height: 12),
+                          itemBuilder: (context, index) {
+                            final item = _evidence[index];
+                            switch (item.type) {
+                              case EvidenceType.audio:
+                                return _AudioEvidenceTile(
+                                  file: item,
+                                  onDelete: () => _deleteItem(item),
+                                );
+                              case EvidenceType.video:
+                                return _VideoEvidenceTile(
+                                  file: item,
+                                  onDelete: () => _deleteItem(item),
+                                );
+                              case EvidenceType.photo:
+                                return _PhotoEvidenceTile(
+                                  file: item,
+                                  onDelete: () => _deleteItem(item),
+                                );
+                            }
+                          },
+                        ),
                       ),
-                    );
-                  },
-                ),
               ),
             ],
           ),
@@ -130,19 +191,20 @@ class _RecordedEvidenceScreenState extends State<RecordedEvidenceScreen> {
   }
 }
 
-/// Shared visual shell so photo/audio/video tiles look consistent.
 class _EvidenceTileShell extends StatelessWidget {
   final IconData icon;
   final String title;
   final String subtitle;
   final Widget trailing;
   final VoidCallback? onTap;
+  final VoidCallback onDelete;
 
   const _EvidenceTileShell({
     required this.icon,
     required this.title,
     required this.subtitle,
     required this.trailing,
+    required this.onDelete,
     this.onTap,
   });
 
@@ -150,6 +212,7 @@ class _EvidenceTileShell extends StatelessWidget {
   Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
+      onLongPress: onDelete,
       borderRadius: BorderRadius.circular(16),
       child: Container(
         padding: const EdgeInsets.all(14),
@@ -195,6 +258,17 @@ class _EvidenceTileShell extends StatelessWidget {
               ),
             ),
             trailing,
+            const SizedBox(width: 4),
+            IconButton(
+              onPressed: onDelete,
+              icon: const Icon(
+                Icons.delete_outline,
+                color: AppColors.subtitle,
+                size: 20,
+              ),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+            ),
           ],
         ),
       ),
@@ -202,24 +276,31 @@ class _EvidenceTileShell extends StatelessWidget {
   }
 }
 
-String _formatTime(DateTime dt) {
-  final h = dt.hour.toString().padLeft(2, '0');
-  final m = dt.minute.toString().padLeft(2, '0');
-  return '$h:$m';
+String _formatTime(EvidenceFile file) {
+  final range = file.elapsedRangeLabel;
+  if (range != null) return range;
+
+  final dt = file.capturedAt;
+  final hour12 = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+  final minute = dt.minute.toString().padLeft(2, '0');
+  final period = dt.hour < 12 ? 'AM' : 'PM';
+  return '$hour12:$minute $period';
 }
 
 class _PhotoEvidenceTile extends StatelessWidget {
   final EvidenceFile file;
+  final VoidCallback onDelete;
 
-  const _PhotoEvidenceTile({required this.file});
+  const _PhotoEvidenceTile({required this.file, required this.onDelete});
 
   @override
   Widget build(BuildContext context) {
     return _EvidenceTileShell(
       icon: Icons.photo_camera_outlined,
       title: file.label,
-      subtitle: _formatTime(file.capturedAt),
+      subtitle: _formatTime(file),
       trailing: const Icon(Icons.chevron_right, color: AppColors.subtitle),
+      onDelete: onDelete,
       onTap: () {
         Get.to(
           () => Scaffold(
@@ -240,16 +321,18 @@ class _PhotoEvidenceTile extends StatelessWidget {
 
 class _VideoEvidenceTile extends StatelessWidget {
   final EvidenceFile file;
+  final VoidCallback onDelete;
 
-  const _VideoEvidenceTile({required this.file});
+  const _VideoEvidenceTile({required this.file, required this.onDelete});
 
   @override
   Widget build(BuildContext context) {
     return _EvidenceTileShell(
       icon: Icons.videocam_outlined,
       title: file.label,
-      subtitle: _formatTime(file.capturedAt),
+      subtitle: _formatTime(file),
       trailing: const Icon(Icons.chevron_right, color: AppColors.subtitle),
+      onDelete: onDelete,
       onTap: () => Get.to(() => VideoPlaybackScreen(path: file.path)),
     );
   }
@@ -257,8 +340,9 @@ class _VideoEvidenceTile extends StatelessWidget {
 
 class _AudioEvidenceTile extends StatefulWidget {
   final EvidenceFile file;
+  final VoidCallback onDelete;
 
-  const _AudioEvidenceTile({required this.file});
+  const _AudioEvidenceTile({required this.file, required this.onDelete});
 
   @override
   State<_AudioEvidenceTile> createState() => _AudioEvidenceTileState();
@@ -296,7 +380,8 @@ class _AudioEvidenceTileState extends State<_AudioEvidenceTile> {
     return _EvidenceTileShell(
       icon: Icons.mic_none_outlined,
       title: widget.file.label,
-      subtitle: _formatTime(widget.file.capturedAt),
+      subtitle: _formatTime(widget.file),
+      onDelete: widget.onDelete,
       trailing: IconButton(
         icon: Icon(
           _isPlaying ? Icons.pause_circle_filled : Icons.play_circle_fill,

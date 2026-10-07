@@ -1,5 +1,4 @@
 import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'package:rahbar_app/utils/App_colors.dart';
@@ -39,18 +38,40 @@ class _VideoPlaybackScreenState extends State<VideoPlaybackScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
+      extendBodyBehindAppBar: true, // lets the video sit behind the AppBar
       appBar: AppBar(
-        backgroundColor: Colors.black,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
       ),
-      body: Center(
-        child: _ready
-            ? AspectRatio(
-                aspectRatio: _controller.value.aspectRatio,
-                child: VideoPlayer(_controller),
-              )
-            : const CircularProgressIndicator(color: Colors.white),
-      ),
+      body: _ready
+          ? GestureDetector(
+              onTap: () {
+                setState(() {
+                  _controller.value.isPlaying
+                      ? _controller.pause()
+                      : _controller.play();
+                });
+              },
+              // Fills the entire available area (edge-to-edge, like a
+              // native video player) instead of the previous
+              // Center + AspectRatio, which let the video shrink to
+              // fit and left black letterbox bars around it on most
+              // phone aspect ratios. BoxFit.cover scales the video up
+              // to fill the screen, cropping any overflow -- same
+              // behavior as Instagram/TikTok-style video viewers.
+              child: SizedBox.expand(
+                child: FittedBox(
+                  fit: BoxFit.cover,
+                  child: SizedBox(
+                    width: _controller.value.size.width,
+                    height: _controller.value.size.height,
+                    child: VideoPlayer(_controller),
+                  ),
+                ),
+              ),
+            )
+          : const Center(child: CircularProgressIndicator(color: Colors.white)),
       floatingActionButton: _ready
           ? FloatingActionButton(
               backgroundColor: AppColors.primaryPurple,

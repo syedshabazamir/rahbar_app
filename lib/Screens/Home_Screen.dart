@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:rahbar_app/Controller/Alert_Controller.dart';
 import 'package:rahbar_app/utils/App_colors.dart';
 import 'package:rahbar_app/widget/bottom_navigation.dart';
 
@@ -29,6 +30,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // truth for 'name' -- once that loads.
   String _greetingName = 'there';
 
+  // Real trusted contacts that are set to be notified, loaded from
+  // users/{uid}/trustedContacts -- the same subcollection
+  // TrustedContactScreen writes at onboarding and ContactsScreen
+  // manages afterwards. Still used here for the "Alerting N contacts"
+  // summary card -- AlertController does its OWN fresh fetch of this
+  // same subcollection when an alert actually starts, so the two
+  // stay independent and the summary card never blocks sending.
+  List<String> _notifiedContactNames = [];
+  bool _isLoadingContacts = true;
+
   @override
   void initState() {
     super.initState();
@@ -43,6 +54,40 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       duration: const Duration(seconds: 2),
     )..repeat();
     _loadUserName();
+    _loadNotifiedContacts();
+  }
+
+  // Loads only the contacts flagged to be notified -- those are the
+  // ones that actually matter for the "who gets alerted" summary.
+  // Contacts saved before 'isNotified' existed are treated as notified.
+  Future<void> _loadNotifiedContacts() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      if (mounted) setState(() => _isLoadingContacts = false);
+      return;
+    }
+
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('trustedContacts')
+          .orderBy('createdAt')
+          .get();
+
+      if (!mounted) return;
+      setState(() {
+        _notifiedContactNames = snapshot.docs
+            .where((d) => d.data()['isNotified'] as bool? ?? true)
+            .map((d) => (d.data()['name'] ?? '').toString().trim())
+            .where((name) => name.isNotEmpty)
+            .toList();
+        _isLoadingContacts = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _isLoadingContacts = false);
+    }
   }
 
   Future<void> _loadUserName() async {
@@ -106,15 +151,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   void _onSosSent() {
     _holdController.reset();
-    // TODO: trigger the real SOS flow -- send location + start
-    // recording + notify trusted contacts.
-    Get.snackbar(
-      'SOS sent',
-      'Your trusted contacts are being alerted.',
-      snackPosition: SnackPosition.TOP,
-      backgroundColor: AppColors.primaryPurpleDark,
-      colorText: Colors.white,
-    );
+    setState(() => _isArmed = false);
+
+    // AlertController owns the live GPS stream and the Firestore
+    // alert doc -- registered here (not local state) because it must
+    // keep running after this screen is gone, e.g. while
+    // ActiveAlertScreen is showing. startAlert() does its own fresh
+    // Firestore fetch of trusted contacts (including linkedUserId),
+    // so no arguments need to be passed in here.
+    final alertController = Get.put(AlertController());
+    alertController.startAlert();
+
+    // ActiveAlertScreen reads everything live from AlertController via
+    // Get.find<AlertController>() -- no navigation arguments needed,
+    // since location/elapsed time keep changing after this point.
+    Get.toNamed('/active-alert');
   }
 
   @override
@@ -312,7 +363,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         style: TextStyle(fontSize: 14, color: AppColors.subtitle),
       ),
       const SizedBox(height: 16),
-      Container(
+      _buildContactsCard(),
+    ];
+  }
+
+  // Tappable summary of who actually gets alerted. Opens the Contacts
+  // screen, then refreshes on return since contacts may have been
+  // added, removed, or toggled while over there.
+  Widget _buildContactsCard() {
+    return InkWell(
+      onTap: () async {
+        await Get.toNamed('/contacts');
+        _loadNotifiedContacts();
+      },
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
         width: double.infinity,
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
@@ -337,22 +402,27 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ),
             const SizedBox(width: 12),
-            const Expanded(
+            Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Alerting 2 contacts',
-                    style: TextStyle(
+                    _contactsTitle,
+                    style: const TextStyle(
                       fontSize: 14.5,
                       fontWeight: FontWeight.w600,
                       color: AppColors.title,
                     ),
                   ),
-                  SizedBox(height: 2),
+                  const SizedBox(height: 2),
                   Text(
-                    'Mom, Sara F.',
-                    style: TextStyle(fontSize: 13, color: AppColors.subtitle),
+                    _contactsSubtitle,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: AppColors.subtitle,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ],
               ),
@@ -361,7 +431,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ],
         ),
       ),
-    ];
+    );
+  }
+
+  String get _contactsTitle {
+    if (_isLoadingContacts) return 'Loading contacts...';
+    final count = _notifiedContactNames.length;
+    if (count == 0) return 'No contacts yet';
+    if (count == 1) return 'Alerting 1 contact';
+    return 'Alerting $count contacts';
+  }
+
+  String get _contactsSubtitle {
+    if (_isLoadingContacts) return '';
+    if (_notifiedContactNames.isEmpty) {
+      return 'Tap to add someone who gets alerted';
+    }
+    return _notifiedContactNames.join(', ');
   }
 
   List<Widget> _buildArmedFooter() {

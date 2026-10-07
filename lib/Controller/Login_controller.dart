@@ -1,6 +1,10 @@
+import 'dart:async';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:rahbar_app/utils/Fcm_token_sync.dart';
 
 /// Handles the real login flow: Firebase Auth sign-in with
 /// email/password. LoginScreen just reads/calls into this — no direct
@@ -56,7 +60,23 @@ class LoginController extends GetxController {
         password: password,
       );
 
+      final uid = FirebaseAuth.instance.currentUser!.uid;
+
+      // Backfills phoneIndex for accounts created before that write
+      // existed at signup — this is what lets a trusted contact find
+      // this person by phone number. Cheap to run every login (it's a
+      // no-op once the entry is already correct), and self-healing:
+      // anyone signed up before this fix gets fixed automatically the
+      // next time they log in, no manual backfill script needed.
+      unawaited(_ensurePhoneIndexed(uid));
+
       isLoading.value = false;
+
+      // Login is exactly when a token most needs re-syncing -- e.g.
+      // the person reinstalled the app, or logged in on a new device
+      // -- so this device becomes the one that receives pushes.
+      unawaited(syncFcmToken());
+
       // Clears the auth stack so back-navigation from Home doesn't
       // return the user to login/signup.
       Get.offAllNamed('/home');
@@ -66,6 +86,32 @@ class LoginController extends GetxController {
     } catch (e) {
       isLoading.value = false;
       _showError('Something went wrong. Please try again.');
+    }
+  }
+
+  // Makes sure this user's phoneIndex/{phone} entry exists and points
+  // at them. Reads their own phone from their own Firestore doc
+  // (which Firestore rules already allow them to read), so this is
+  // safe to call on every login with no special permission needed.
+  Future<void> _ensurePhoneIndexed(String uid) async {
+    try {
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .get();
+      final data = userDoc.data();
+      final phone = data?['phone'] as String?;
+      final name = data?['name'] as String?;
+      if (phone == null || phone.isEmpty) return;
+
+      await FirebaseFirestore.instance.collection('phoneIndex').doc(phone).set({
+        'userId': uid,
+        'displayName': name,
+      });
+    } catch (_) {
+      // Not fatal -- login already succeeded. Contact-linking for
+      // this person just stays broken until a future successful
+      // attempt.
     }
   }
 

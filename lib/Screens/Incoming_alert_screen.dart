@@ -1,40 +1,143 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:rahbar_app/utils/App_colors.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 /// Full-screen SOS takeover shown to a trusted contact when someone
-/// they're watching over sends an alert. Reached from tapping an
-/// alert in AlertsScreen; expects arguments: name, initials, location.
+/// they're watching over sends an alert. Reached by tapping the push
+/// notification (see main.dart's _handleNotificationTap), which
+/// passes { 'alertId': ... }.
+///
+/// Streams the alert doc live (location/status keep changing while
+/// active), and does a one-time fetch of the sender's profile (name,
+/// phone) since that doesn't change mid-alert.
 class IncomingAlertScreen extends StatelessWidget {
   const IncomingAlertScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
     final args = Get.arguments;
-    final name = (args is Map ? args['name'] : null) ?? 'Amara Khan';
-    final initials = (args is Map ? args['initials'] : null) ?? 'AK';
-    final location = (args is Map ? args['location'] : null) ?? 'Jinnah Avenue';
-    final firstName = name.toString().split(' ').first;
+    final alertId = (args is Map ? args['alertId'] : null)?.toString();
 
-    void onViewLiveLocation() {
-      Get.toNamed(
-        '/live-tracking',
-        arguments: {'name': name, 'location': location},
-      );
+    if (alertId == null || alertId.isEmpty) {
+      return const _ErrorScaffold(message: 'This alert link is invalid.');
     }
 
-    void onCallNow() {
-      // TODO: launch a real phone call, e.g. with url_launcher:
-      // launchUrl(Uri(scheme: 'tel', path: phoneNumber));
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('alerts')
+          .doc(alertId)
+          .snapshots(),
+      builder: (context, alertSnap) {
+        if (alertSnap.connectionState == ConnectionState.waiting) {
+          return const _LoadingScaffold();
+        }
+        if (!alertSnap.hasData || !alertSnap.data!.exists) {
+          return const _ErrorScaffold(
+            message: 'This alert could not be found.',
+          );
+        }
+
+        final alert = alertSnap.data!.data()!;
+        final senderId = alert['senderId'] as String?;
+        final status = alert['status'] as String? ?? 'active';
+        final location = alert['location'] as Map<String, dynamic>?;
+
+        if (senderId == null) {
+          return const _ErrorScaffold(
+            message: 'This alert is missing sender info.',
+          );
+        }
+
+        return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+          future: FirebaseFirestore.instance
+              .collection('users')
+              .doc(senderId)
+              .get(),
+          builder: (context, userSnap) {
+            if (userSnap.connectionState == ConnectionState.waiting) {
+              return const _LoadingScaffold();
+            }
+
+            final userData = userSnap.data?.data();
+            final name =
+                (userData?['name'] as String?)?.trim().isNotEmpty == true
+                ? userData!['name'] as String
+                : 'Someone';
+            final phone = userData?['phone'] as String?;
+            final firstName = name.split(RegExp(r'\s+')).first;
+            final initials = _initialsFrom(name);
+
+            return _IncomingAlertBody(
+              alertId: alertId,
+              senderName: name,
+              firstName: firstName,
+              initials: initials,
+              phone: phone,
+              isActive: status == 'active',
+              hasLocation: location != null,
+            );
+          },
+        );
+      },
+    );
+  }
+
+  static String _initialsFrom(String name) {
+    final parts = name.trim().split(RegExp(r'\s+'));
+    if (parts.isEmpty || parts.first.isEmpty) return '?';
+    if (parts.length == 1) return parts.first.substring(0, 1).toUpperCase();
+    return (parts.first.substring(0, 1) + parts.last.substring(0, 1))
+        .toUpperCase();
+  }
+}
+
+class _IncomingAlertBody extends StatelessWidget {
+  final String alertId;
+  final String senderName;
+  final String firstName;
+  final String initials;
+  final String? phone;
+  final bool isActive;
+  final bool hasLocation;
+
+  const _IncomingAlertBody({
+    required this.alertId,
+    required this.senderName,
+    required this.firstName,
+    required this.initials,
+    required this.phone,
+    required this.isActive,
+    required this.hasLocation,
+  });
+
+  void _onViewLiveLocation() {
+    Get.toNamed(
+      '/live-tracking',
+      arguments: {'alertId': alertId, 'name': senderName},
+    );
+  }
+
+  Future<void> _onCallNow() async {
+    if (phone == null || phone!.isEmpty) {
       Get.snackbar(
-        'Calling $firstName…',
-        'This would start a real phone call.',
+        'No phone number',
+        "$firstName hasn't added a phone number to their account.",
         snackPosition: SnackPosition.BOTTOM,
         backgroundColor: AppColors.title,
         colorText: Colors.white,
       );
+      return;
     }
+    final uri = Uri(scheme: 'tel', path: phone);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
+    }
+  }
 
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.alertMaroon,
       body: SafeArea(
@@ -43,8 +146,6 @@ class IncomingAlertScreen extends StatelessWidget {
           child: Column(
             children: [
               const SizedBox(height: 8),
-
-              // ---- Back + label ----
               Row(
                 children: [
                   IconButton(
@@ -53,11 +154,11 @@ class IncomingAlertScreen extends StatelessWidget {
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(),
                   ),
-                  const Expanded(
+                  Expanded(
                     child: Center(
                       child: Text(
-                        'SOS ALERT',
-                        style: TextStyle(
+                        isActive ? 'SOS ALERT' : 'ALERT ENDED',
+                        style: const TextStyle(
                           color: Colors.white70,
                           fontSize: 13,
                           fontWeight: FontWeight.w700,
@@ -66,13 +167,12 @@ class IncomingAlertScreen extends StatelessWidget {
                       ),
                     ),
                   ),
-                  const SizedBox(width: 40), // balances the back button
+                  const SizedBox(width: 40),
                 ],
               ),
 
               const Spacer(flex: 3),
 
-              // ---- Avatar ----
               Container(
                 width: 84,
                 height: 84,
@@ -82,7 +182,7 @@ class IncomingAlertScreen extends StatelessWidget {
                 ),
                 alignment: Alignment.center,
                 child: Text(
-                  initials.toString(),
+                  initials,
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 28,
@@ -93,9 +193,8 @@ class IncomingAlertScreen extends StatelessWidget {
 
               const SizedBox(height: 24),
 
-              // ---- Message ----
               Text(
-                '$firstName needs help',
+                isActive ? '$firstName needs help' : '$firstName is safe now',
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 24,
@@ -104,7 +203,11 @@ class IncomingAlertScreen extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                'Sent just now from $location, near City Hospital',
+                isActive
+                    ? (hasLocation
+                          ? 'Sharing their live location with you'
+                          : 'Getting their location...')
+                    : 'This alert has ended.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   color: Colors.white70,
@@ -115,55 +218,127 @@ class IncomingAlertScreen extends StatelessWidget {
 
               const Spacer(flex: 4),
 
-              // ---- View live location ----
-              SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: OutlinedButton.icon(
-                  onPressed: onViewLiveLocation,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white,
-                    side: const BorderSide(color: Colors.white, width: 1.4),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
+              if (isActive) ...[
+                SizedBox(
+                  width: double.infinity,
+                  height: 56,
+                  child: OutlinedButton.icon(
+                    onPressed: hasLocation ? _onViewLiveLocation : null,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      side: const BorderSide(color: Colors.white, width: 1.4),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
                     ),
-                  ),
-                  icon: const Icon(Icons.location_on_outlined, size: 20),
-                  label: const Text(
-                    'View live location',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 14),
-
-              // ---- Call now ----
-              SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: ElevatedButton.icon(
-                  onPressed: onCallNow,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.alertMaroonLight,
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                  ),
-                  icon: const Icon(Icons.call_outlined, size: 20),
-                  label: Text(
-                    'Call $firstName now',
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
+                    icon: const Icon(Icons.location_on_outlined, size: 20),
+                    label: const Text(
+                      'View live location',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                 ),
-              ),
+                const SizedBox(height: 14),
+                SizedBox(
+                  width: double.infinity,
+                  height: 56,
+                  child: ElevatedButton.icon(
+                    onPressed: _onCallNow,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.alertMaroonLight,
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                    ),
+                    icon: const Icon(Icons.call_outlined, size: 20),
+                    label: Text(
+                      'Call $firstName now',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ] else
+                SizedBox(
+                  width: double.infinity,
+                  height: 56,
+                  child: OutlinedButton(
+                    onPressed: () => Get.back(),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      side: const BorderSide(color: Colors.white, width: 1.4),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                    ),
+                    child: const Text(
+                      'Close',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
 
               const SizedBox(height: 24),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LoadingScaffold extends StatelessWidget {
+  const _LoadingScaffold();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      backgroundColor: AppColors.alertMaroon,
+      body: Center(child: CircularProgressIndicator(color: Colors.white)),
+    );
+  }
+}
+
+class _ErrorScaffold extends StatelessWidget {
+  final String message;
+  const _ErrorScaffold({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.alertMaroon,
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline, color: Colors.white, size: 40),
+              const SizedBox(height: 16),
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white, fontSize: 15),
+              ),
+              const SizedBox(height: 24),
+              OutlinedButton(
+                onPressed: () => Get.back(),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  side: const BorderSide(color: Colors.white),
+                ),
+                child: const Text('Go back'),
+              ),
             ],
           ),
         ),

@@ -1,8 +1,11 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:rahbar_app/utils/App_colors.dart';
 import 'package:rahbar_app/utils/Phone_utils.dart';
+import 'package:rahbar_app/utils/user_lookup.dart';
 
 /// Holds the two text controllers for a single contact entry,
 /// so the user can add more than one trusted contact.
@@ -20,17 +23,21 @@ class _ContactEntry {
 
 /// "Add a trusted contact" screen, used in two places:
 ///
-/// 1. Onboarding (Step 2 of 3), reached from Signup — "Continue" moves
-///    the user on to the Permissions screen.
+/// 1. Onboarding (Step 2 of 3), reached from Signup — "Continue" saves
+///    the contact(s) to Firestore, then moves the user on to the
+///    Permissions screen.
 ///
 /// 2. From the "My contacts" screen's "+ Add a trusted contact" button,
-///    reached any time after onboarding — the button reads "Save" and
-///    just pops back to the contacts list with the new contact(s).
+///    reached any time after onboarding — the button also reads "Save"
+///    and ALSO persists directly to Firestore now (previously this
+///    just popped the raw data back to ContactsScreen and left saving
+///    to that screen — now both paths save for real, here, so the
+///    phone-lookup logic below only has to live in one place).
 ///
 /// Which mode it's in is decided by the `fromContacts` navigation
 /// argument:
 ///   Get.toNamed('/trusted-contact', arguments: {'fromContacts': true})
-/// for the "Save" behavior; omit it (or pass false) for onboarding.
+/// for the standalone flow; omit it (or pass false) for onboarding.
 class TrustedContactScreen extends StatefulWidget {
   const TrustedContactScreen({super.key});
 
@@ -43,6 +50,9 @@ class _TrustedContactScreenState extends State<TrustedContactScreen> {
 
   // True when reached from the Contacts screen instead of onboarding.
   bool _fromContacts = false;
+
+  // True while the save-to-Firestore call is in flight.
+  bool _isSaving = false;
 
   @override
   void initState() {
@@ -83,19 +93,62 @@ class _TrustedContactScreenState extends State<TrustedContactScreen> {
       )
       .toList();
 
-  void _onPrimaryButtonPressed() {
-    if (!_hasAtLeastOneContact) return;
+  // Writes each filled contact as a doc in the current user's
+  // `trustedContacts` subcollection. For each one, looks up whether
+  // the phone number belongs to a real registered Rahbar account (via
+  // phoneIndex) and stores that as `linkedUserId` -- THIS is what
+  // AlertController.startAlert() reads later to know which real users
+  // to actually push-notify when SOS is sent. A contact with no
+  // linkedUserId is saved (so it still shows in the list) but can
+  // never receive a push, since there's no account to send it to.
+  Future<void> _saveTrustedContacts(List<Map<String, String>> contacts) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      throw StateError('No signed-in user found.');
+    }
 
-    if (_fromContacts) {
-      // Standalone "add contact" flow: hand the new contact(s) back
-      // to the Contacts screen and pop.
-      Get.back(result: _filledContacts);
-    } else {
-      // Onboarding flow: move on to the next setup step.
-      // TODO: persist _filledContacts (already E.164-normalized) to
-      // your backend/local store here, e.g. as a subcollection under
-      // the current user's Firestore doc.
-      Get.toNamed('/permissions');
+    final userDoc = FirebaseFirestore.instance.collection('users').doc(uid);
+
+    for (final contact in contacts) {
+      final phone = contact['phone']!;
+      final lookup = await findUserByPhone(phone);
+
+      await userDoc.collection('trustedContacts').add({
+        'name': contact['name'],
+        'phone': phone,
+        'isNotified': true,
+        'linkedUserId': lookup.found ? lookup.userId : null,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    }
+  }
+
+  Future<void> _onPrimaryButtonPressed() async {
+    if (!_hasAtLeastOneContact || _isSaving) return;
+
+    setState(() => _isSaving = true);
+    try {
+      await _saveTrustedContacts(_filledContacts);
+      if (!mounted) return;
+
+      if (_fromContacts) {
+        // Tell ContactsScreen a save happened so it knows to refresh
+        // its list from Firestore.
+        Get.back(result: true);
+      } else {
+        Get.toNamed('/permissions');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      Get.snackbar(
+        'Could not save contacts',
+        'Something went wrong. Please try again.',
+        snackPosition: SnackPosition.BOTTOM,
+        backgroundColor: const Color(0xFF9B2C3A),
+        colorText: Colors.white,
+      );
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
     }
   }
 
@@ -320,7 +373,7 @@ class _TrustedContactScreenState extends State<TrustedContactScreen> {
                 width: double.infinity,
                 height: 56,
                 child: ElevatedButton(
-                  onPressed: _hasAtLeastOneContact
+                  onPressed: (_hasAtLeastOneContact && !_isSaving)
                       ? _onPrimaryButtonPressed
                       : null,
                   style: ElevatedButton.styleFrom(
@@ -333,13 +386,24 @@ class _TrustedContactScreenState extends State<TrustedContactScreen> {
                       borderRadius: BorderRadius.circular(16),
                     ),
                   ),
-                  child: Text(
-                    _fromContacts ? 'Save' : 'Continue',
-                    style: const TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
+                  child: _isSaving
+                      ? const SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.5,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              Colors.white,
+                            ),
+                          ),
+                        )
+                      : Text(
+                          _fromContacts ? 'Save' : 'Continue',
+                          style: const TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                 ),
               ),
 

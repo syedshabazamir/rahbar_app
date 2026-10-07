@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:rahbar_app/utils/App_colors.dart';
+import 'package:rahbar_app/utils/Fcm_token_sync.dart';
 
 /// App entry gate: decides where the user lands before they see
 /// anything else.
@@ -45,6 +47,16 @@ class _WrapperScreenState extends State<WrapperScreen> {
     if (!mounted) return;
 
     if (user != null) {
+      // IMPORTANT: a returning user who's already signed in skips
+      // LoginController.logIn() entirely, which is the only other
+      // place syncFcmToken() gets called. Without this, every
+      // returning user's device_tokens row silently goes stale
+      // (or never gets created at all), and they stop receiving SOS
+      // pushes with no error anywhere to point at it. Fire-and-forget
+      // so a slow/failed sync never delays getting the person into
+      // the app.
+      unawaited(syncFcmToken());
+
       Get.offAllNamed('/home');
     } else {
       Get.offAllNamed('/splash');

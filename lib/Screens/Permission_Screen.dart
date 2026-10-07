@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:location/location.dart' as loc;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:rahbar_app/utils/App_colors.dart';
 
@@ -16,6 +17,13 @@ class _PermissionsScreenState extends State<PermissionsScreen>
   PermissionStatus _locationStatus = PermissionStatus.denied;
   PermissionStatus _microphoneStatus = PermissionStatus.denied;
   PermissionStatus _cameraStatus = PermissionStatus.denied;
+  PermissionStatus _notificationStatus = PermissionStatus.denied;
+
+  // Separate from _locationStatus: this is whether the phone's GPS/
+  // location SERVICE is switched on at all, not just whether the app
+  // has permission to use it. Both need to be true for SOS to
+  // actually be able to share a location.
+  bool _locationServiceEnabled = true;
 
   bool _loading = true;
 
@@ -43,13 +51,75 @@ class _PermissionsScreenState extends State<PermissionsScreen>
     final location = await Permission.location.status;
     final microphone = await Permission.microphone.status;
     final camera = await Permission.camera.status;
+    final notification = await Permission.notification.status;
+    final serviceEnabled = await loc.Location().serviceEnabled();
     if (!mounted) return;
     setState(() {
       _locationStatus = location;
       _microphoneStatus = microphone;
       _cameraStatus = camera;
+      _notificationStatus = notification;
+      _locationServiceEnabled = serviceEnabled;
       _loading = false;
     });
+  }
+
+  // Location gets its own handler (instead of the generic
+  // _handleToggle below) because turning it on needs one more step
+  // than the others: after permission is granted, it also has to
+  // check whether location SERVICES are switched on, and if not, try
+  // to show Android's native in-app "Turn on Location" popup right
+  // here during onboarding -- rather than the person only discovering
+  // it's off later, mid-emergency, when sending an SOS.
+  Future<void> _handleLocationToggle(bool turningOn) async {
+    if (!turningOn) {
+      _showOpenSettingsDialog(
+        message:
+            'To turn this off, disable it for Rahbar in your device Settings.',
+      );
+      return;
+    }
+
+    final status = await Permission.location.request();
+    if (!mounted) return;
+    setState(() => _locationStatus = status);
+
+    if (status.isPermanentlyDenied) {
+      _showOpenSettingsDialog();
+      return;
+    }
+    if (!status.isGranted) {
+      Get.snackbar(
+        'Permission needed',
+        'Rahbar needs location access for SOS to work properly.',
+        snackPosition: SnackPosition.BOTTOM,
+        backgroundColor: AppColors.title,
+        colorText: Colors.white,
+      );
+      return;
+    }
+
+    // Permission granted -- now make sure the service itself is on.
+    // On Android this can show a native popup right in the app; on
+    // iOS, Apple does not allow that dialog, so this just checks the
+    // current state and the person has to enable it via Settings.
+    final locationService = loc.Location();
+    bool serviceEnabled = await locationService.serviceEnabled();
+    if (!serviceEnabled) {
+      serviceEnabled = await locationService.requestService();
+    }
+    if (!mounted) return;
+    setState(() => _locationServiceEnabled = serviceEnabled);
+
+    if (!serviceEnabled) {
+      Get.snackbar(
+        'Location is off',
+        'Please turn on Location Services on your phone for SOS to work.',
+        snackPosition: SnackPosition.BOTTOM,
+        backgroundColor: AppColors.title,
+        colorText: Colors.white,
+      );
+    }
   }
 
   Future<void> _handleToggle({
@@ -125,13 +195,15 @@ class _PermissionsScreenState extends State<PermissionsScreen>
 
   bool get _canFinishSetup =>
       _locationStatus.isGranted &&
+      _locationServiceEnabled &&
       _microphoneStatus.isGranted &&
-      _cameraStatus.isGranted;
+      _cameraStatus.isGranted &&
+      _notificationStatus.isGranted;
 
   void _onFinishSetupPressed() {
-    // All three permissions are already genuinely granted at this point.
-    // Clears the whole onboarding stack so back-navigation from Home
-    // doesn't return the user to signup/permissions/etc.
+    // All permissions AND location services are genuinely on at this
+    // point. Clears the whole onboarding stack so back-navigation
+    // from Home doesn't return the user to signup/permissions/etc.
     Get.offAllNamed('/home');
   }
 
@@ -142,6 +214,8 @@ class _PermissionsScreenState extends State<PermissionsScreen>
     required PermissionStatus status,
     required Permission permission,
     required ValueChanged<PermissionStatus> onStatus,
+    ValueChanged<bool>? customOnChanged,
+    String? warningText,
   }) {
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -151,57 +225,100 @@ class _PermissionsScreenState extends State<PermissionsScreen>
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: AppColors.fieldBorder),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Column(
         children: [
-          Container(
-            width: 40,
-            height: 40,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: AppColors.ringColor,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(icon, size: 20, color: AppColors.primaryPurple),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.title,
-                  ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: AppColors.ringColor,
+                  borderRadius: BorderRadius.circular(10),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: const TextStyle(
-                    fontSize: 13.5,
-                    color: AppColors.subtitle,
-                    height: 1.3,
-                  ),
+                child: Icon(icon, size: 20, color: AppColors.primaryPurple),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.title,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        fontSize: 13.5,
+                        color: AppColors.subtitle,
+                        height: 1.3,
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 8),
+              Switch(
+                value: status.isGranted,
+                onChanged:
+                    customOnChanged ??
+                    (turningOn) => _handleToggle(
+                      permission: permission,
+                      turningOn: turningOn,
+                      onStatus: onStatus,
+                    ),
+                activeColor: Colors.white,
+                activeTrackColor: AppColors.success,
+                inactiveThumbColor: Colors.white,
+                inactiveTrackColor: const Color(0xFFE3DCE1),
+              ),
+            ],
           ),
-          const SizedBox(width: 8),
-          Switch(
-            value: status.isGranted,
-            onChanged: (turningOn) => _handleToggle(
-              permission: permission,
-              turningOn: turningOn,
-              onStatus: onStatus,
+          if (warningText != null) ...[
+            const SizedBox(height: 10),
+            GestureDetector(
+              onTap: () => _handleLocationToggle(true),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: AppColors.ringColor,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.info_outline,
+                      size: 16,
+                      color: AppColors.primaryPurple,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        warningText,
+                        style: const TextStyle(
+                          fontSize: 12.5,
+                          color: AppColors.title,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
-            activeColor: Colors.white,
-            activeTrackColor: AppColors.success,
-            inactiveThumbColor: Colors.white,
-            inactiveTrackColor: const Color(0xFFE3DCE1),
-          ),
+          ],
         ],
       ),
     );
@@ -277,6 +394,13 @@ class _PermissionsScreenState extends State<PermissionsScreen>
                               permission: Permission.location,
                               onStatus: (s) =>
                                   setState(() => _locationStatus = s),
+                              customOnChanged: _handleLocationToggle,
+                              warningText:
+                                  (_locationStatus.isGranted &&
+                                      !_locationServiceEnabled)
+                                  ? 'Location permission is on, but Location '
+                                        'Services are off. Tap to turn on.'
+                                  : null,
                             ),
                             _buildPermissionTile(
                               icon: Icons.mic_none_outlined,
@@ -295,6 +419,16 @@ class _PermissionsScreenState extends State<PermissionsScreen>
                               permission: Permission.camera,
                               onStatus: (s) =>
                                   setState(() => _cameraStatus = s),
+                            ),
+                            _buildPermissionTile(
+                              icon: Icons.notifications_none_rounded,
+                              title: 'Notifications',
+                              subtitle:
+                                  "To alert you when a trusted contact sends SOS",
+                              status: _notificationStatus,
+                              permission: Permission.notification,
+                              onStatus: (s) =>
+                                  setState(() => _notificationStatus = s),
                             ),
                           ],
                         ),

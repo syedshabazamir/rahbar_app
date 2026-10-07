@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:rahbar_app/utils/Phone_utils.dart';
+import 'package:rahbar_app/utils/Fcm_token_sync.dart';
 
 /// Handles the real signup flow: Firebase Auth account creation +
 /// writing the user's profile (including normalized phone) to
@@ -81,15 +84,28 @@ class SignupController extends GetxController {
       final uid = credential.user!.uid;
       final normalizedEmail = email.toLowerCase();
 
-      // 2. Write the user's profile to Firestore. The 'phone' field is
-      // what the syncPhoneIndex Cloud Function watches to keep
-      // phoneIndex/{phone} up to date for trusted-contact lookups.
+      // 2. Write the user's profile to Firestore.
       await FirebaseFirestore.instance.collection('users').doc(uid).set({
         'name': name,
         'email': normalizedEmail,
         'phone': normalizedPhone,
         'createdAt': FieldValue.serverTimestamp(),
       });
+
+      // 2b. Write the phoneIndex entry -- this is what
+      // findUserByPhone() reads when a trusted contact looks this
+      // person up by phone number. Without this write, contact
+      // linking silently never works: linkedUserId stays null
+      // forever, notifiedUserIds stays empty, and SOS alerts never
+      // actually reach anyone, with no error anywhere to point at it.
+      //
+      // Field names MUST match firestore.rules exactly: 'userId' and
+      // 'displayName' only (the rule checks
+      // request.resource.data.keys().hasOnly(['userId', 'displayName'])).
+      await FirebaseFirestore.instance
+          .collection('phoneIndex')
+          .doc(normalizedPhone)
+          .set({'userId': uid, 'displayName': name});
 
       // 3. Write a minimal public existence-check entry, doc-keyed by
       // email. This is what lets the Forgot Password screen verify an
@@ -105,6 +121,13 @@ class SignupController extends GetxController {
 
       // 4. Optionally set the display name on the Auth profile too.
       await credential.user!.updateDisplayName(name);
+
+      // 5. Save this device's FCM token so push notifications (e.g.
+      // "your trusted contact sent an SOS") have somewhere to go.
+      // Safe to fire-and-not-block-on: if it fails, the account is
+      // still created successfully, just without a token yet --
+      // it'll get synced again on next login.
+      unawaited(syncFcmToken());
 
       isLoading.value = false;
       Get.toNamed('/trusted-contact');

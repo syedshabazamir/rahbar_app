@@ -174,7 +174,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 _initials,
                                 style: const TextStyle(
                                   color: Colors.white,
-                                  fontSize: 16,
+                                  fontSize: 20,
                                   fontWeight: FontWeight.w700,
                                 ),
                               ),
@@ -202,7 +202,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                               ? _name!
                                               : 'Unnamed user',
                                           style: const TextStyle(
-                                            fontSize: 15.5,
+                                            fontSize: 18,
                                             fontWeight: FontWeight.w700,
                                             color: AppColors.title,
                                           ),

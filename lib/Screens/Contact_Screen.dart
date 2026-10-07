@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:rahbar_app/utils/App_colors.dart';
 import 'package:rahbar_app/utils/Phone_utils.dart';
+import 'package:rahbar_app/utils/user_lookup.dart';
 import 'package:rahbar_app/widget/bottom_navigation.dart';
 
 /// Small rotating palette so contacts get a reasonable-looking avatar
@@ -21,7 +22,7 @@ Color _avatarColorFor(int index) =>
 
 /// A single trusted contact shown in the list. `id` is the Firestore
 /// document id under the current user's `trustedContacts` subcollection,
-/// so toggling / future edits know exactly which doc to write to.
+/// so toggling / editing / deleting know exactly which doc to write to.
 class _Contact {
   final String id;
   final String name;
@@ -76,8 +77,9 @@ class _ContactsScreenState extends State<ContactsScreen> {
   }
 
   // Loads the real trusted-contact list from Firestore -- the same
-  // subcollection TrustedContactScreen writes to during onboarding
-  // (users/{uid}/trustedContacts), ordered by when each was added.
+  // subcollection TrustedContactScreen writes to (both during
+  // onboarding AND from this screen's "Add a trusted contact" button
+  // -- it saves directly now rather than handing data back).
   Future<void> _loadContacts() async {
     final ref = _contactsRef;
     if (ref == null) {
@@ -137,85 +139,263 @@ class _ContactsScreenState extends State<ContactsScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => contact.isNotified = !newValue);
-      Get.snackbar(
-        'Could not update contact',
-        'Please try again.',
-        snackPosition: SnackPosition.BOTTOM,
-        backgroundColor: const Color(0xFF9B2C3A),
-        colorText: Colors.white,
-      );
+      _showErrorSnack('Could not update contact');
     }
   }
 
+  // TrustedContactScreen SAVES THE CONTACT ITSELF now (for both
+  // onboarding and this standalone flow) and just pops back with
+  // `true` as a plain signal that a save happened -- it no longer
+  // hands back the raw contact data for this screen to write. So the
+  // fix here is simple: just refetch from Firestore instead of trying
+  // to parse a List that doesn't come back anymore.
   Future<void> _onAddContactPressed() async {
-    // Tells TrustedContactScreen it's in standalone mode (not onboarding),
-    // so it shows "Save" and pops back here instead of going to Permissions.
     final result = await Get.toNamed(
       '/trusted-contact',
       arguments: {'fromContacts': true},
     );
 
-    if (result is! List || result.isEmpty) return;
+    if (result == true) {
+      await _loadContacts();
+    }
+  }
 
+  // ---- Edit ----------------------------------------------------------
+
+  Future<void> _editContact(int index) async {
     final ref = _contactsRef;
-    if (ref == null) {
-      Get.snackbar(
-        'Could not save contact',
-        'You need to be signed in.',
-        snackPosition: SnackPosition.BOTTOM,
-        backgroundColor: const Color(0xFF9B2C3A),
-        colorText: Colors.white,
-      );
-      return;
+    if (ref == null) return;
+    final contact = _contacts[index];
+
+    final nameController = TextEditingController(text: contact.name);
+    final phoneController = TextEditingController(text: contact.phone);
+    bool isSaving = false;
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final normalized = normalizePhoneNumber(phoneController.text);
+            final isPhoneValid = isPlausiblePhoneNumber(normalized);
+            final isNameValid = nameController.text.trim().isNotEmpty;
+
+            return AlertDialog(
+              backgroundColor: AppColors.background,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              title: const Text(
+                'Edit contact',
+                style: TextStyle(
+                  color: AppColors.title,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Contact name',
+                    style: TextStyle(fontSize: 13, color: AppColors.fieldLabel),
+                  ),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: nameController,
+                    onChanged: (_) => setDialogState(() {}),
+                    decoration: InputDecoration(
+                      hintText: 'e.g. Mom, Sara',
+                      hintStyle: const TextStyle(color: AppColors.fieldHint),
+                      filled: true,
+                      fillColor: AppColors.fieldFill,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(
+                          color: AppColors.fieldBorder,
+                        ),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Phone number',
+                    style: TextStyle(fontSize: 13, color: AppColors.fieldLabel),
+                  ),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: phoneController,
+                    keyboardType: TextInputType.phone,
+                    onChanged: (_) => setDialogState(() {}),
+                    decoration: InputDecoration(
+                      hintText: 'e.g. 0300 1234567',
+                      hintStyle: const TextStyle(color: AppColors.fieldHint),
+                      filled: true,
+                      fillColor: AppColors.fieldFill,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(
+                          color: AppColors.fieldBorder,
+                        ),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      suffixIcon: isPhoneValid
+                          ? const Icon(
+                              Icons.check,
+                              color: AppColors.success,
+                              size: 20,
+                            )
+                          : null,
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSaving ? null : () => Get.back(result: false),
+                  child: const Text(
+                    'Cancel',
+                    style: TextStyle(color: AppColors.subtitle),
+                  ),
+                ),
+                TextButton(
+                  onPressed: (isSaving || !isNameValid || !isPhoneValid)
+                      ? null
+                      : () async {
+                          setDialogState(() => isSaving = true);
+
+                          final newName = nameController.text.trim();
+                          final newPhone = normalizePhoneNumber(
+                            phoneController.text,
+                          );
+                          final phoneChanged = newPhone != contact.phone;
+
+                          try {
+                            // If the phone number changed, re-check
+                            // whether it belongs to a real Rahbar
+                            // account -- linkedUserId must stay in
+                            // sync with whatever phone is actually
+                            // saved, or SOS alerts could silently try
+                            // to notify the WRONG account, or fail to
+                            // notify the right one.
+                            String? linkedUserId;
+                            if (phoneChanged) {
+                              final lookup = await findUserByPhone(newPhone);
+                              linkedUserId = lookup.found
+                                  ? lookup.userId
+                                  : null;
+                            }
+
+                            await ref.doc(contact.id).update({
+                              'name': newName,
+                              'phone': newPhone,
+                              if (phoneChanged) 'linkedUserId': linkedUserId,
+                            });
+
+                            if (context.mounted) Get.back(result: true);
+                          } catch (_) {
+                            setDialogState(() => isSaving = false);
+                          }
+                        },
+                  child: isSaving
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text(
+                          'Save',
+                          style: TextStyle(
+                            color: AppColors.primaryPurple,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (saved == true) {
+      await _loadContacts();
     }
+  }
 
-    final batch = FirebaseFirestore.instance.batch();
-    final newContacts = <_Contact>[];
+  // ---- Delete ----------------------------------------------------------
 
-    for (final item in result) {
-      if (item is! Map) continue;
-      final name = (item['name'] ?? '').toString();
-      final phone = (item['phone'] ?? '').toString();
-      if (name.isEmpty) continue;
+  Future<void> _deleteContact(int index) async {
+    final ref = _contactsRef;
+    if (ref == null) return;
+    final contact = _contacts[index];
 
-      // TrustedContactScreen already normalizes the phone before
-      // handing it back here, but the _Contact constructor also
-      // normalizes -- safe either way, since normalizing an
-      // already-normalized number is a no-op.
-      final docRef = ref.doc();
-      batch.set(docRef, {
-        'name': name,
-        'phone': normalizePhoneNumber(phone),
-        'isNotified': true,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-      newContacts.add(
-        _Contact(
-          id: docRef.id,
-          name: name,
-          phone: phone,
-          avatarColor: _avatarColorFor(_contacts.length + newContacts.length),
-          isNotified: true,
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.background,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          'Remove contact?',
+          style: TextStyle(color: AppColors.title, fontWeight: FontWeight.w700),
         ),
-      );
-    }
+        content: Text(
+          '${contact.name} will no longer be alerted if you send an SOS.',
+          style: const TextStyle(color: AppColors.subtitle),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Get.back(result: false),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: AppColors.subtitle),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Get.back(result: true),
+            child: const Text(
+              'Remove',
+              style: TextStyle(
+                color: Color(0xFF9B2C3A),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
 
-    if (newContacts.isEmpty) return;
+    if (confirmed != true) return;
+
+    // Optimistic removal, reverted on failure.
+    final removed = contact;
+    final removedIndex = index;
+    setState(() => _contacts.removeAt(index));
 
     try {
-      await batch.commit();
+      await ref.doc(contact.id).delete();
+    } catch (_) {
       if (!mounted) return;
-      setState(() => _contacts.addAll(newContacts));
-    } catch (e) {
-      if (!mounted) return;
-      Get.snackbar(
-        'Could not save contact',
-        'Something went wrong. Please try again.',
-        snackPosition: SnackPosition.BOTTOM,
-        backgroundColor: const Color(0xFF9B2C3A),
-        colorText: Colors.white,
-      );
+      setState(() => _contacts.insert(removedIndex, removed));
+      _showErrorSnack('Could not remove contact');
     }
+  }
+
+  void _showErrorSnack(String title) {
+    Get.snackbar(
+      title,
+      'Please try again.',
+      snackPosition: SnackPosition.BOTTOM,
+      backgroundColor: const Color(0xFF9B2C3A),
+      colorText: Colors.white,
+    );
   }
 
   @override
@@ -263,7 +443,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        'Tap to choose who gets notified',
+                        'Tap to choose who gets notified · Hold for more',
                         style: TextStyle(
                           fontSize: 13.5,
                           color: AppColors.title.withOpacity(0.85),
@@ -333,6 +513,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
               _ContactTile(
                 contact: _contacts[i],
                 onToggle: () => _toggleNotified(i),
+                onEdit: () => _editContact(i),
+                onDelete: () => _deleteContact(i),
               ),
 
             const SizedBox(height: 8),
@@ -350,95 +532,174 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
 /// One contact row: avatar with initials, name + phone, and a
 /// checkbox-style toggle for whether they get notified during SOS.
+/// Long-press (or tap the overflow icon) opens Edit / Delete.
 class _ContactTile extends StatelessWidget {
   final _Contact contact;
   final VoidCallback onToggle;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
 
-  const _ContactTile({required this.contact, required this.onToggle});
+  const _ContactTile({
+    required this.contact,
+    required this.onToggle,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  void _showActions(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.background,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.fieldBorder,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 16),
+            ListTile(
+              leading: const Icon(
+                Icons.edit_outlined,
+                color: AppColors.primaryPurple,
+              ),
+              title: const Text(
+                'Edit contact',
+                style: TextStyle(color: AppColors.title),
+              ),
+              onTap: () {
+                Get.back();
+                onEdit();
+              },
+            ),
+            ListTile(
+              leading: const Icon(
+                Icons.delete_outline,
+                color: Color(0xFF9B2C3A),
+              ),
+              title: const Text(
+                'Remove contact',
+                style: TextStyle(color: Color(0xFF9B2C3A)),
+              ),
+              onTap: () {
+                Get.back();
+                onDelete();
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppColors.fieldFill,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.fieldBorder),
-      ),
-      child: Row(
-        children: [
-          // ---- Avatar ----
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: contact.avatarColor,
-            ),
-            alignment: Alignment.center,
-            child: Text(
-              contact.initials,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-          const SizedBox(width: 14),
-
-          // ---- Name + phone ----
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  contact.name,
-                  style: const TextStyle(
-                    fontSize: 15.5,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.title,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  // Stored as normalized E.164 ("+923001234567"); shown
-                  // as-is here. Swap in a display-formatting helper if
-                  // you want spaced-out formatting in the UI later.
-                  contact.phone,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    color: AppColors.subtitle,
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // ---- Notify toggle (checkbox-style) ----
-          GestureDetector(
-            onTap: onToggle,
-            child: Container(
-              width: 26,
-              height: 26,
+    return InkWell(
+      onLongPress: () => _showActions(context),
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppColors.fieldFill,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: AppColors.fieldBorder),
+        ),
+        child: Row(
+          children: [
+            // ---- Avatar ----
+            Container(
+              width: 42,
+              height: 42,
               decoration: BoxDecoration(
-                color: contact.isNotified ? AppColors.success : Colors.white,
-                borderRadius: BorderRadius.circular(7),
-                border: Border.all(
-                  color: contact.isNotified
-                      ? AppColors.success
-                      : AppColors.fieldBorder,
-                  width: 1.4,
-                ),
+                shape: BoxShape.circle,
+                color: contact.avatarColor,
               ),
               alignment: Alignment.center,
-              child: contact.isNotified
-                  ? const Icon(Icons.check, size: 16, color: Colors.white)
-                  : null,
+              child: Text(
+                contact.initials,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
             ),
-          ),
-        ],
+            const SizedBox(width: 14),
+
+            // ---- Name + phone ----
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    contact.name,
+                    style: const TextStyle(
+                      fontSize: 15.5,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.title,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    contact.phone,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: AppColors.subtitle,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // ---- Notify toggle (checkbox-style) ----
+            GestureDetector(
+              onTap: onToggle,
+              child: Container(
+                width: 26,
+                height: 26,
+                decoration: BoxDecoration(
+                  color: contact.isNotified ? AppColors.success : Colors.white,
+                  borderRadius: BorderRadius.circular(7),
+                  border: Border.all(
+                    color: contact.isNotified
+                        ? AppColors.success
+                        : AppColors.fieldBorder,
+                    width: 1.4,
+                  ),
+                ),
+                alignment: Alignment.center,
+                child: contact.isNotified
+                    ? const Icon(Icons.check, size: 16, color: Colors.white)
+                    : null,
+              ),
+            ),
+
+            const SizedBox(width: 4),
+
+            // ---- Overflow menu (same actions as long-press) ----
+            IconButton(
+              onPressed: () => _showActions(context),
+              icon: const Icon(
+                Icons.more_vert,
+                color: AppColors.subtitle,
+                size: 20,
+              ),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -1,32 +1,26 @@
 import 'dart:io';
-
 import 'package:camera/camera.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:rahbar_app/model/Evidance_model.dart';
 import 'package:record/record.dart';
+import 'package:rahbar_app/model/Evidance_model.dart';
 
-/// Handles capturing and saving real evidence (photo, audio, video) to
-/// local device storage when an SOS alert is triggered.
+/// Handles LOCAL storage of evidence (photo/audio/video) captured
+/// during an SOS alert.
 ///
-/// Usage (e.g. from wherever your SOS button lives):
-/// ```dart
-/// await EvidenceRecorderService.instance.captureSosEvidence();
-/// ```
-///
-/// NOTE: This saves files locally under the app's documents directory,
-/// in an `evidence/` subfolder. Uploading these files to your backend
-/// (so a trusted contact can view them remotely) is a separate step —
-/// see the TODO in `_uploadIfNeeded()`.
+/// This service no longer owns a CameraController -- AlertController
+/// is the single owner of the camera during an active alert (only one
+/// process can hold the camera at a time), and hands finished clips
+/// here just to be copied into the local evidence/ folder so they
+/// show up in RecordedEvidenceScreen.
 class EvidenceRecorderService {
   EvidenceRecorderService._();
   static final EvidenceRecorderService instance = EvidenceRecorderService._();
 
-  CameraController? _cameraController;
+  // Kept available for a scenario where you want PURE audio evidence
+  // with no video. NOT safe to run at the same time as AlertController's
+  // camera recording -- most devices only allow one process to hold the
+  // microphone at once, and the camera's video already records audio.
   final AudioRecorder _audioRecorder = AudioRecorder();
-  bool _isCapturing = false;
-
-  bool get isCapturing => _isCapturing;
 
   Future<Directory> _evidenceDir() async {
     final appDir = await getApplicationDocumentsDirectory();
@@ -37,88 +31,48 @@ class EvidenceRecorderService {
     return dir;
   }
 
-  Future<bool> _requestPermissions() async {
-    final statuses = await [Permission.camera, Permission.microphone].request();
-    return statuses.values.every((s) => s.isGranted);
-  }
-
-  Future<void> _ensureCameraReady() async {
-    if (_cameraController != null && _cameraController!.value.isInitialized) {
-      return;
-    }
-    final cameras = await availableCameras();
-    if (cameras.isEmpty) {
-      throw StateError('No cameras available on this device.');
-    }
-    final camera = cameras.firstWhere(
-      (c) => c.lensDirection == CameraLensDirection.back,
-      orElse: () => cameras.first,
-    );
-    _cameraController = CameraController(
-      camera,
-      ResolutionPreset.medium,
-      enableAudio: true,
-    );
-    await _cameraController!.initialize();
-  }
-
-  /// Captures a photo, a short audio clip, and a short video clip in
-  /// sequence, and saves all three to the evidence folder. Call this
-  /// as soon as an SOS alert is triggered.
+  /// Copies a just-recorded video clip (an XFile from
+  /// CameraController.stopVideoRecording()) into the local evidence
+  /// folder. Returns the EvidenceFile so callers can also upload from
+  /// this same stable local path.
   ///
-  /// Runs one capture at a time (rather than simultaneously) since the
-  /// camera and standalone mic recording both need exclusive access to
-  /// the microphone on most devices.
-  Future<List<EvidenceFile>> captureSosEvidence({
-    Duration audioDuration = const Duration(seconds: 15),
-    Duration videoDuration = const Duration(seconds: 10),
+  /// [startElapsedSeconds] / [stopElapsedSeconds], if given, are the
+  /// EXACT values AlertController's live "Active · 00:04" counter
+  /// showed when this clip started/stopped recording -- encoded into
+  /// the filename so RecordedEvidenceScreen can show those same
+  /// numbers back later, even after the app restarts.
+  Future<EvidenceFile> saveVideoClipLocally(
+    XFile clip, {
+    int? startElapsedSeconds,
+    int? stopElapsedSeconds,
   }) async {
-    if (_isCapturing) {
-      // Already capturing — avoid overlapping captures.
-      return getSavedEvidence();
-    }
-    _isCapturing = true;
-    final captured = <EvidenceFile>[];
-
-    try {
-      final granted = await _requestPermissions();
-      if (!granted) {
-        throw StateError('Camera/microphone permission not granted.');
-      }
-
-      await _ensureCameraReady();
-
-      final photoPath = await _capturePhoto();
-      captured.add(EvidenceFile.fromPath(photoPath));
-
-      final audioPath = await _recordAudioClip(audioDuration);
-      if (audioPath != null) {
-        captured.add(EvidenceFile.fromPath(audioPath));
-      }
-
-      final videoPath = await _recordVideoClip(videoDuration);
-      captured.add(EvidenceFile.fromPath(videoPath));
-
-      // TODO: upload `captured` files to your backend here so a trusted
-      // contact can view them remotely via LiveEvidenceScreen without
-      // needing the affected user's device.
-    } finally {
-      _isCapturing = false;
-    }
-
-    return captured;
+    final dir = await _evidenceDir();
+    final capturedMillis = DateTime.now().millisecondsSinceEpoch;
+    final fileName = (startElapsedSeconds != null && stopElapsedSeconds != null)
+        ? 'video_${capturedMillis}_${startElapsedSeconds}_$stopElapsedSeconds.mp4'
+        : 'video_$capturedMillis.mp4';
+    final savedPath = '${dir.path}/$fileName';
+    await File(clip.path).copy(savedPath);
+    return EvidenceFile.fromPath(savedPath);
   }
 
-  Future<String> _capturePhoto() async {
-    final xfile = await _cameraController!.takePicture();
+  /// Copies a just-taken photo (an XFile from
+  /// CameraController.takePicture()) into the local evidence folder.
+  /// NOTE: this is currently local-only -- the Supabase "evidence"
+  /// bucket only accepts video/mp4 right now, so photos are not
+  /// uploaded for contacts to see yet.
+  Future<EvidenceFile> savePhotoLocally(XFile photo) async {
     final dir = await _evidenceDir();
     final fileName = 'photo_${DateTime.now().millisecondsSinceEpoch}.jpg';
     final savedPath = '${dir.path}/$fileName';
-    await File(xfile.path).copy(savedPath);
-    return savedPath;
+    await File(photo.path).copy(savedPath);
+    return EvidenceFile.fromPath(savedPath);
   }
 
-  Future<String?> _recordAudioClip(Duration duration) async {
+  /// Standalone microphone-only recording -- see the class doc comment
+  /// for why this should not be called while AlertController's camera
+  /// loop is also running.
+  Future<EvidenceFile?> recordAudioClip(Duration duration) async {
     if (!await _audioRecorder.hasPermission()) return null;
 
     final dir = await _evidenceDir();
@@ -131,22 +85,12 @@ class EvidenceRecorderService {
     );
     await Future.delayed(duration);
     await _audioRecorder.stop();
-    return path;
-  }
-
-  Future<String> _recordVideoClip(Duration duration) async {
-    await _cameraController!.startVideoRecording();
-    await Future.delayed(duration);
-    final xfile = await _cameraController!.stopVideoRecording();
-
-    final dir = await _evidenceDir();
-    final fileName = 'video_${DateTime.now().millisecondsSinceEpoch}.mp4';
-    final savedPath = '${dir.path}/$fileName';
-    await File(xfile.path).copy(savedPath);
-    return savedPath;
+    return EvidenceFile.fromPath(path);
   }
 
   /// Returns all evidence currently saved on this device, newest first.
+  /// This is what RecordedEvidenceScreen reads -- video clips saved via
+  /// saveVideoClipLocally() during an SOS show up here automatically.
   Future<List<EvidenceFile>> getSavedEvidence() async {
     final dir = await _evidenceDir();
     if (!await dir.exists()) return [];
@@ -157,10 +101,12 @@ class EvidenceRecorderService {
     return files.map((f) => EvidenceFile.fromPath(f.path)).toList();
   }
 
-  /// Releases the camera. Call this when the capturing flow / SOS
-  /// screen is disposed to free the camera for other use.
-  Future<void> dispose() async {
-    await _cameraController?.dispose();
-    _cameraController = null;
+  /// Deletes one saved evidence file from local storage by its path.
+  /// Used by RecordedEvidenceScreen when the person removes an item.
+  Future<void> deleteEvidence(String path) async {
+    final file = File(path);
+    if (await file.exists()) {
+      await file.delete();
+    }
   }
 }
